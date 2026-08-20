@@ -26,7 +26,7 @@ app = FastAPI(title="Barista Backend")
 
 
 class RecipeRequest(BaseModel):
-    drink: str
+    drink: str | None = None
     notes: str | None = None
 
 
@@ -53,16 +53,25 @@ def ping_gemini():
 @app.post("/recipe")
 def recipe(req: RecipeRequest):
     """Ask Gemini for a recipe with specific measurements."""
-    prompt = f"Give me a recipe for {req.drink} with specific measurements"
-    if req.notes:
-        prompt += f". Additional requirements: {req.notes}"
+    drink = (req.drink or "").strip()
+    if not drink:
+        raise HTTPException(
+            status_code=400,
+            detail="Please tell me which drink you'd like a recipe for, then try again.",
+        )
+
+    notes = (req.notes or "").strip()
+
+    prompt = f"Give me a recipe for {drink} with specific measurements"
+    if notes:
+        prompt += f". Additional requirements: {notes}"
 
     try:
         response = client.models.generate_content(model=MODEL, contents=prompt)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Gemini call failed: {e}")
 
-    return {"drink": req.drink, "recipe": response.text}
+    return {"drink": drink, "recipe": response.text}
 
 
 if __name__ == "__main__":
