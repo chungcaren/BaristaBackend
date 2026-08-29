@@ -4,7 +4,15 @@ import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from google import genai
+from google.genai import types
 from pydantic import BaseModel
+
+from prompts import (
+    NOT_A_DRINK_MESSAGE,
+    RECIPE_SYSTEM_INSTRUCTION,
+    RecipeResponse,
+    build_recipe_prompt,
+)
 
 # 1. Load the secret variables from your local .env file
 load_dotenv()
@@ -26,8 +34,9 @@ app = FastAPI(title="Barista Backend")
 
 
 class RecipeRequest(BaseModel):
-    drink: str | None = None
-    notes: str | None = None
+    # Freeform text: a drink name, a rambling description, slang, whatever the
+    # customer types. The model is prompted to interpret it.
+    order: str | None = None
 
 
 @app.get("/health")
@@ -53,25 +62,41 @@ def ping_gemini():
 @app.post("/recipe")
 def recipe(req: RecipeRequest):
     """Ask Gemini for a recipe with specific measurements."""
-    drink = (req.drink or "").strip()
-    if not drink:
+    order = (req.order or "").strip()
+    if not order:
         raise HTTPException(
             status_code=400,
             detail="Please tell me which drink you'd like a recipe for, then try again.",
         )
 
-    notes = (req.notes or "").strip()
-
-    prompt = f"Give me a recipe for {drink} with specific measurements"
-    if notes:
-        prompt += f". Additional requirements: {notes}"
-
     try:
-        response = client.models.generate_content(model=MODEL, contents=prompt)
+        response = client.models.generate_content(
+            model=MODEL,
+            contents=build_recipe_prompt(order),
+            config=types.GenerateContentConfig(
+                system_instruction=RECIPE_SYSTEM_INSTRUCTION,
+                response_mime_type="application/json",
+                response_schema=RecipeResponse,
+            ),
+        )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Gemini call failed: {e}")
 
-    return {"drink": drink, "recipe": response.text}
+    result = response.parsed
+    if result is None:
+        raise HTTPException(
+            status_code=502, detail="Gemini returned a response we couldn't read."
+        )
+
+    if not result.is_drink_order or not result.recipe:
+        raise HTTPException(status_code=400, detail=NOT_A_DRINK_MESSAGE)
+
+    return {
+        "order": order,
+        "drink_name": result.drink_name,
+        "prep_time": result.prep_time,
+        "recipe": result.recipe,
+    }
 
 
 if __name__ == "__main__":
