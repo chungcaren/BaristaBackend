@@ -2,11 +2,12 @@ import os
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Path
 from google import genai
 from google.genai import types
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+import storage
 from prompts import (
     NOT_A_DRINK_MESSAGE,
     RECIPE_SYSTEM_INSTRUCTION,
@@ -97,6 +98,60 @@ def recipe(req: RecipeRequest):
         "prep_time": result.prep_time,
         "recipe": result.recipe,
     }
+
+
+@app.get("/ping-db")
+def ping_db():
+    """Confirm the MongoDB connection works, the way /ping-gemini does."""
+    try:
+        info = storage.ping()
+    except storage.StorageUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+    return {"connected": True, **info}
+
+
+class SaveRecipeRequest(BaseModel):
+    """A recipe the customer asked us to keep. Lengths are capped so the
+    endpoint can't be used as free general-purpose storage."""
+
+    order: str = Field(min_length=1, max_length=500)
+    drink_name: str = Field(min_length=1, max_length=200)
+    prep_time: str | None = Field(default=None, max_length=100)
+    recipe: str = Field(min_length=1, max_length=20_000)
+
+
+@app.post("/recipes", status_code=201)
+def save_recipe(req: SaveRecipeRequest):
+    """Save a recipe and hand back the id that goes in its share URL."""
+    try:
+        recipe_id = storage.save(
+            order=req.order.strip(),
+            drink_name=req.drink_name.strip(),
+            prep_time=req.prep_time,
+            recipe=req.recipe,
+        )
+    except storage.StorageUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+    return {"id": recipe_id}
+
+
+@app.get("/recipes/{recipe_id}")
+def read_recipe(recipe_id: str = Path(min_length=6, max_length=32, pattern=r"^[A-Za-z0-9_-]+$")):
+    """Look up a previously saved recipe by its share id."""
+    try:
+        document = storage.load(recipe_id)
+    except storage.StorageUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+    if document is None:
+        raise HTTPException(
+            status_code=404,
+            detail="That recipe isn't in the book — the link may be wrong or expired.",
+        )
+
+    return document
 
 
 if __name__ == "__main__":
