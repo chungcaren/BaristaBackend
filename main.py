@@ -121,7 +121,7 @@ class SaveRecipeRequest(BaseModel):
     recipe: str = Field(min_length=1, max_length=20_000)
 
 
-@app.post("/recipes", status_code=201)
+@app.post("/save", status_code=201)
 def save_recipe(req: SaveRecipeRequest):
     """Save a recipe and hand back the id that goes in its share URL."""
     try:
